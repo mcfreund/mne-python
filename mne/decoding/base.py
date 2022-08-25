@@ -354,7 +354,7 @@ def get_coef(estimator, attr='filters_', inverse_transform=False):
 @verbose
 def cross_val_multiscore(estimator, X, y=None, groups=None, scoring=None,
                          cv=None, n_jobs=None, verbose=None, fit_params=None,
-                         pre_dispatch='2*n_jobs'):
+                         pre_dispatch='2*n_jobs', return_test_decision_function=False):
     """Evaluate a score by cross-validation.
 
     Parameters
@@ -432,17 +432,31 @@ def cross_val_multiscore(estimator, X, y=None, groups=None, scoring=None,
     # Note: this parallelization is implemented using MNE Parallel
     parallel, p_func, n_jobs = parallel_func(_fit_and_score, n_jobs,
                                              pre_dispatch=pre_dispatch)
-    scores = parallel(
+    results = parallel(
         p_func(
             estimator=clone(estimator), X=X, y=y, scorer=scorer, train=train,
-            test=test, parameters=None, fit_params=fit_params
+            test=test, parameters=None, fit_params=fit_params,
+            return_test_decision_function=return_test_decision_function
         ) for train, test in cv_iter
     )
-    return np.array(scores)[:, 0, ...]  # flatten over joblib output.
+    if return_test_decision_function:
+        scores = [[x[0]] for x in results]
+        scores = np.array(scores)[:, 0, ...]  # flatten over joblib output.
+        decision_functions = [x[1] for x in results]
+        decision_functions = np.concatenate(decision_functions, 0)
+        test = [x[1] for x in cv_iter]  ## list per fold of test indices
+        test = np.concatenate(test, 0)
+        decision_functions = decision_functions.take(test, 0)  ## sort by trial
+        ret = [scores, decision_functions]
+    else:
+        ret = np.array(results)[:, 0, ...]  # flatten over joblib output.
+
+    return ret
 
 
 def _fit_and_score(estimator, X, y, scorer, train, test,
                    parameters, fit_params, return_train_score=False,
+                   return_test_decision_function=False,
                    return_parameters=False, return_n_test_samples=False,
                    return_times=False, error_score='raise'):
     """Fit estimator and compute scores for a given dataset split."""
@@ -493,6 +507,8 @@ def _fit_and_score(estimator, X, y, scorer, train, test,
         score_duration = dt.datetime.now() - start_time - fit_duration
         if return_train_score:
             train_score = _score(estimator, X_train, y_train, scorer)
+        if return_test_decision_function:
+            test_decision_function = estimator.decision_function(X_test)
 
     ret = [train_score, test_score] if return_train_score else [test_score]
 
@@ -505,6 +521,9 @@ def _fit_and_score(estimator, X, y, scorer, train, test,
         ])
     if return_parameters:
         ret.append(parameters)
+    if return_test_decision_function:
+        ret.append(test_decision_function)
+
     return ret
 
 
